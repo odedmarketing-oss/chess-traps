@@ -60,12 +60,14 @@ header button::after{content:'';position:absolute;inset:-8px -2px}   /* 44px hit
 .cf{right:2px;bottom:1px}.cr{left:2px;top:1px}
 #status{padding:12px 2px 6px;min-height:56px}
 #stateline{color:var(--mut);letter-spacing:.3px;text-transform:uppercase;font-size:11px}
-#mainline{font-family:var(--serif);font-size:17px;line-height:44px;margin-top:-9px}
+#mainline{font-family:var(--serif);font-size:17px;line-height:32px;margin-top:-2px}
 #mainline .mv,#mainline .tn{position:relative}
 #mainline .mv::after,#mainline .tn::after{content:'';position:absolute;left:-3px;right:-3px;top:50%;height:44px;margin-top:-22px}   /* 44px hit area */
 #mainline small .tn{cursor:pointer;text-decoration:underline;text-decoration-color:rgba(227,168,63,.35);text-underline-offset:2px}
 #mainline .mv{color:var(--amber);cursor:pointer;text-decoration:underline;text-decoration-color:rgba(227,168,63,.4);text-underline-offset:3px}
 #opts{display:flex;flex-direction:column;gap:6px;padding-top:6px}
+#app>*{flex-shrink:0}
+#mainline .more{color:var(--mut);cursor:pointer;text-decoration:underline;text-underline-offset:3px;white-space:nowrap}
 #palette{display:flex;flex-wrap:wrap;gap:4px;justify-content:center}
 #palette button{font-size:22px;line-height:1;padding:6px 9px;min-width:44px;min-height:44px;border:1px solid var(--mut);border-radius:6px;background:transparent}
 #palette button.w{color:#fff;text-shadow:0 0 2px #000}
@@ -315,7 +317,10 @@ function paintState(){
   }else{
     $('#stateline').textContent="opponent's turn — enter their move on the board";
     markAll(n);
-    $('#mainline').innerHTML='expected reply: '+entries.map(([u,e])=>'<span class="mv" data-uci="'+u+'">'+moveWords(n.board,u,e.san)+'</span>').join(' · ');
+    const ex=entries.filter(([u,e])=>!e.rejoin).sort((a,b)=>b[1].traps.length-a[1].traps.length);
+    const shown=replyOpen?ex:ex.slice(0,4);
+    $('#mainline').innerHTML='expected reply: '+shown.map(([u,e])=>'<span class="mv" data-uci="'+u+'">'+moveWords(n.board,u,e.san)+'</span>').join(' · ')+
+      (ex.length>4?' <span class="more">'+(replyOpen?'show fewer':'+'+(ex.length-4)+' more')+'</span>':'');
   }
   if(why)opts.insertAdjacentHTML('beforeend',why);
 }
@@ -355,6 +360,8 @@ function whyPlates(k,live){
   return h;
 }
 let huntOpen=false;
+let replyOpen=false;
+document.addEventListener('click',ev=>{if(ev.target.closest&&ev.target.closest('#mainline .more')){replyOpen=!replyOpen;render();}});
 function renderHunt(names){
   const h=$('#hunt');
   h.classList.toggle('open',huntOpen);
@@ -375,7 +382,7 @@ function trapCard(name){
     '<button id="tcback">back</button></div>';
   document.getElementById('tcback').addEventListener('click',()=>{render();});
 }
-function pushHist(){
+function pushHist(){replyOpen=false;
   if(mode==='book')hist.push({mode:'book',cur});
   else hist.push({mode:'wander',W:JSON.parse(JSON.stringify(W))});
 }
