@@ -107,6 +107,8 @@ header button::after{content:'';position:absolute;inset:-8px -2px}   /* 44px hit
 .side small{display:block;font-family:var(--sans);font-size:11px;color:var(--mut);margin-top:3px}
 #pickcancel{min-height:44px;background:none;border:1px solid var(--line);color:var(--mut);font-size:13px;padding:0 18px;border-radius:4px;font-family:var(--sans)}
 #pickcancel[hidden]{display:none}
+#pickresume{min-height:44px;background:none;border:1px solid var(--amber-soft);color:var(--amber);font-size:13px;padding:0 18px;border-radius:4px;font-family:var(--sans)}
+#pickresume[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -116,6 +118,7 @@ header button::after{content:'';position:absolute;inset:-8px -2px}   /* 44px hit
     <p>Enter the moves of your real game, for both players. Trap Book shows which moves set traps — and exactly what to do when your opponent falls for one.</p>
     <button class="side" data-side="white">I play White<small>426 traps · 116 end in checkmate</small></button>
     <button class="side" data-side="black">I play Black<small>215 traps · 63 end in checkmate</small></button>
+    <button id="pickresume" hidden>continue last game</button>
     <button id="pickcancel" hidden>back to game</button>
   </div>
   <header>
@@ -739,7 +742,7 @@ function win(name){
 }
 function reset(){over=false;sel=null;mode='book';W=null;S=null;banner=null;hist=[];cur=startId();render();}
 
-// === persistence: the game survives the phone closing the app ===
+// === persistence: the game is saved; on launch the picker offers "continue last game" ===
 function saveGame(){
   if(!side)return;
   try{localStorage.setItem(SAVE_KEY,JSON.stringify({side,mode,cur,W,S,hist}));}catch(e){}
@@ -755,18 +758,29 @@ function restoreGame(){
     :g.mode==='wander'?okW(g.W)
     :g.mode==='setup'&&okW(g.S)&&g.S.prev&&okStep(g.S.prev);
   if(!okNow||!Array.isArray(g.hist)||!g.hist.every(okStep))return false;
-  side=g.side;tree=t;mode=g.mode;cur=g.cur;W=g.W;S=g.S;hist=g.hist;
-  over=false;sel=null;banner=null;
-  $('#pick').style.display='none';
-  render();
+  if(!g.hist.length&&g.mode==='book')return false;   // nothing played yet: nothing to continue
+  saved=g;
+  $('#pickresume').hidden=false;
   return true;
+}
+// launch opens on the side picker; the saved game comes back only on request
+let saved=null;
+function resumeGame(){
+  const g=saved; if(!g)return;
+  saved=null; $('#pickresume').hidden=true;
+  side=g.side;tree=DATA.trees[g.side];mode=g.mode;cur=g.cur;W=g.W;S=g.S;hist=g.hist;
+  over=false;sel=null;banner=null;
+  closePick();
+  render();
 }
 
 function closePick(){ $('#pick').style.display='none'; }
 document.querySelectorAll('.side').forEach(b=>b.addEventListener('click',()=>{
+  saved=null;$('#pickresume').hidden=true;
   side=b.dataset.side;tree=DATA.trees[side];closePick();reset();
 }));
 $('#pickcancel').addEventListener('click',closePick);
+$('#pickresume').addEventListener('click',resumeGame);
 $('#reset').addEventListener('click',()=>{ $('#pickcancel').hidden=!side; $('#pick').style.display='flex'; });
 $('#undo').addEventListener('click',undo);
 $('#setup').addEventListener('click',()=>{ if(side)enterSetup(); });
