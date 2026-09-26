@@ -738,5 +738,9 @@ $('#mainline').addEventListener('click',ev=>{
 });
 restoreGame();
 </script>
+<script>
+// offline support: cache the app so the home-screen icon opens without a connection
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+</script>
 </body>
 </html>
