@@ -89,6 +89,8 @@ header button{background:none;border:1px solid var(--line);color:var(--mut);font
 #pick p{color:var(--mut);font-size:13px;max-width:260px;text-align:center;line-height:1.5}
 .side{width:220px;padding:14px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font-size:16px;font-family:var(--serif)}
 .side small{display:block;font-family:var(--sans);font-size:11px;color:var(--mut);margin-top:3px}
+#pickcancel{min-height:44px;background:none;border:1px solid var(--line);color:var(--mut);font-size:13px;padding:0 18px;border-radius:4px;font-family:var(--sans)}
+#pickcancel[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -98,6 +100,7 @@ header button{background:none;border:1px solid var(--line);color:var(--mut);font
     <p>Mirror your rival's moves on the board. The book points the way while a trap is alive — and keeps watching for a way back if the game wanders.</p>
     <button class="side" data-side="white">I play White<small>426 lines · 116 end in mate</small></button>
     <button class="side" data-side="black">I play Black<small>215 lines · 63 end in mate</small></button>
+    <button id="pickcancel" hidden>back to game</button>
   </div>
   <header>
     <h1>Trap <em>Book</em></h1>
@@ -122,6 +125,8 @@ let W=null;                // wander state {bd:string64, turn:'w'|'b', castle:'K
 let S=null;                // setup state {bd, turn, castle, manual, pal}
 let hist=[];               // [{mode:'book',cur} | {mode:'wander',W}]
 let banner=null;           // transient plate html
+let promo=null;            // pending off-book promotion {from,to,apply}
+const SAVE_KEY='trapbook.game.v1';
 
 function startId(){return side+'|rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -';}
 function sqName(i){const r=8-Math.floor(i/8),f=i%8;return 'abcdefgh'[f]+r;}
@@ -152,7 +157,8 @@ function b64ToPlc(bd){
 function nodeBoard(n){return n.board;}
 
 function render(){
-  const bd = mode==='setup' ? S.bd : (mode==='wander' ? W.bd : nodeBoard(tree[cur]));
+  promo=null;
+  const bd =mode==='setup' ? S.bd : (mode==='wander' ? W.bd : nodeBoard(tree[cur]));
   const el=$('#board');el.innerHTML='';
   const order=[...Array(64).keys()];
   const disp = side==='black'? order.map(i=>63-i):order;
@@ -174,9 +180,17 @@ function render(){
     el.appendChild(d);
   });
   paintState();
+  saveGame();
 }
 
-function clearMarks(){document.querySelectorAll('.sq').forEach(s=>s.classList.remove('sel','hintfrom','hintto','altfrom','to-mate','to-qw','to-adv'));}
+function clearMarks(){document.querySelectorAll('.sq').forEach(s=>s.classList.remove('sel','hintfrom','hintto','altfrom','to-mate','to-qw','to-adv','to-safe'));}
+function sameColor(bd,a,b){return bd[a]!=='.'&&bd[b]!=='.'&&isWpc(bd[a])===isWpc(bd[b]);}
+function isPromo(bd,from,to){return (bd[from]==='P'&&to<8)||(bd[from]==='p'&&to>=56);}
+function selectSq(i,n){
+  sel=i;clearMarks();
+  document.querySelector('.sq[data-i="'+i+'"]').classList.add('sel');
+  if(n&&n.ours)markAll(n,i);
+}
 function sortedEntries(n){
   return Object.entries(n.moves).sort((a,b)=>(b[1].mate-a[1].mate)||((b[1].qwin?1:0)-(a[1].qwin?1:0))||(b[1].traps.length-a[1].traps.length));
 }
@@ -319,46 +333,77 @@ function pushHist(){
 
 function tap(i){
   if(over)return;
+  if(promo){sel=null;render();return;}   // tapping the board dismisses the promotion picker
   if(mode==='setup'){setupTap(i);return;}
   if(mode==='book'){
-    const n=tree[cur];
+    const n=tree[cur],bd=nodeBoard(n);
     if(n.end)return;
     if(sel===null){
-      if(nodeBoard(n)[i]==='.')return;
-      sel=i;clearMarks();
-      document.querySelector('.sq[data-i="'+i+'"]').classList.add('sel');
-      if(n.ours){markAll(n,i);}
+      if(bd[i]==='.')return;
+      selectSq(i,n);
     }else{
-      const uci=sqName(sel)+sqName(i); sel=null;
+      if(sel===i){sel=null;render();return;}          // tap again = deselect
+      if(sameColor(bd,sel,i)){selectSq(i,n);return;}  // own piece = switch selection
+      const from=sel,uci=sqName(sel)+sqName(i); sel=null;
       const match=Object.keys(n.moves).find(u=>u.slice(0,4)===uci);
       if(match){advance(match);}
       else if(n.ours){render();}
+      else if(isPromo(bd,from,i)){askPromo(from,i,p=>enterWander(uci,p));}
       else{enterWander(uci);}
     }
   }else{ // wander
     if(sel===null){
       if(W.bd[i]==='.')return;
-      sel=i;clearMarks();
-      document.querySelector('.sq[data-i="'+i+'"]').classList.add('sel');
+      selectSq(i);
     }else{
-      const from=sel,to=i; sel=null;
-      if(from===to){render();return;}
-      pushHist();
-      banner=null;
-      wanderMove(from,to);
-      const back=lookup();
-      if(back){
-        mode='book';cur=back;W=null;
-        banner='<div class="plate back"><h2>Back in the book</h2><p>The position matches a known trap line again. The hunt resumes.</p></div>';
-        render(); banner=null;
-        return;
-      }
-      render();
+      const from=sel,to=i;
+      if(from===to){sel=null;render();return;}
+      if(sameColor(W.bd,from,to)){selectSq(to);return;}
+      sel=null;
+      if(isPromo(W.bd,from,to)){askPromo(from,to,p=>wanderStep(from,to,p));return;}
+      wanderStep(from,to);
     }
   }
 }
+function wanderStep(from,to,pr){
+  pushHist();
+  banner=null;
+  wanderMove(from,to,pr);
+  const back=lookup();
+  if(back){
+    mode='book';cur=back;W=null;
+    banner='<div class="plate back"><h2>Back in the book</h2><p>The position matches a known trap line again. The hunt resumes.</p></div>';
+    render(); banner=null;
+    return;
+  }
+  render();
+}
+// off-book promotion: pick the piece from the tray before the move is applied
+function askPromo(from,to,apply){
+  const bd=mode==='wander'?W.bd:nodeBoard(tree[cur]);
+  const white=isWpc(bd[from]);
+  clearMarks();
+  document.querySelector('.sq[data-i="'+from+'"]').classList.add('sel');
+  document.querySelector('.sq[data-i="'+to+'"]').classList.add('hintto');
+  $('#stateline').textContent='promote on '+sqName(to)+' — pick a piece';
+  $('#mainline').textContent='';
+  const opts=$('#opts');opts.innerHTML='';
+  const pal=document.createElement('div');pal.id='palette';
+  'QRBN'.split('').forEach(u=>{
+    const b=document.createElement('button');
+    b.className=white?'w':'b';b.textContent=GLYPH[u];
+    b.addEventListener('click',()=>apply(u));
+    pal.appendChild(b);
+  });
+  opts.appendChild(pal);
+  const row=document.createElement('div');row.className='setrow';
+  const cnc=document.createElement('button');cnc.textContent='cancel';
+  cnc.addEventListener('click',()=>render());
+  row.appendChild(cnc);opts.appendChild(row);
+  promo={from,to,apply};
+}
 
-function applyMove(bd,from,to){
+function applyMove(bd,from,to,pr){
   let b=bd.split('');
   const p=b[from];
   if((p==='p'||p==='P') && (from%8)!==(to%8) && b[to]==='.'){
@@ -370,9 +415,10 @@ function applyMove(bd,from,to){
     else { b[row*8+3]=b[row*8+0]; b[row*8+0]='.'; }
   }
   b[to]=p; b[from]='.';
-  // promotion: default to queen
-  if(p==='P' && Math.floor(to/8)===0) b[to]='Q';
-  if(p==='p' && Math.floor(to/8)===7) b[to]='q';
+  // promotion: chosen piece, default to queen
+  const pu=(pr||'Q').toUpperCase();
+  if(p==='P' && Math.floor(to/8)===0) b[to]=pu;
+  if(p==='p' && Math.floor(to/8)===7) b[to]=pu.toLowerCase();
   return b.join('');
 }
 
@@ -495,9 +541,9 @@ function compass(){
   return [...res.entries()].map(([uci,e])=>Object.assign({uci},e)).sort((a,b)=>a.dist-b.dist||b.traps.size-a.traps.size).slice(0,4);
 }
 
-function wanderMove(from,to){
+function wanderMove(from,to,pr){
   const p=W.bd[from];
-  W.bd=applyMove(W.bd,from,to);
+  W.bd=applyMove(W.bd,from,to,pr);
   // castling rights
   let c=W.castle==='-'?'':W.castle;
   const drop=ch=>{c=c.replace(ch,'');};
@@ -538,13 +584,13 @@ function advance(uci){
   if(rj){$('#stateline').textContent+=' · transposed back into book';}
 }
 
-function enterWander(uci){
+function enterWander(uci,pr){
   pushHist();
   const n=tree[cur];
   const kf=keyFields(cur);
   W={bd:nodeBoard(n),turn:kf.turn,castle:kf.castle,ep:kf.ep};
   const from=idxOf(uci.slice(0,2)),to=idxOf(uci.slice(2,4));
-  wanderMove(from,to);
+  wanderMove(from,to,pr);
   mode='wander';
   const back=lookup();
   if(back){ mode='book';cur=back;W=null;
@@ -577,7 +623,8 @@ function setupDone(){
   const mover=S.turn==='w';
   const restK=bd.indexOf(mover?'k':'K');
   if(attacked(bd,restK,mover)){ $('#stateline').textContent='side not to move is in check — fix the position'; return; }
-  pushHist();
+  const p=S.prev;   // undo returns to the position before set-up
+  hist.push(p.mode==='book'?{mode:'book',cur:p.cur}:{mode:'wander',W:p.W});
   W={bd:S.bd,turn:S.turn,castle:S.manual?S.castle:castleInfer(S.bd),ep:'-'};
   S=null;
   const back=lookupState(W);
@@ -630,12 +677,37 @@ function win(name){
   $('#stateline').textContent='trap sprung · '+kind.toLowerCase();$('#mainline').textContent='';
   $('#opts').innerHTML='<div class="plate win"><h2>'+kind+' — '+name+'</h2><p>'+(info.pun||'')+'</p><button onclick="reset()">new game</button></div>';
 }
-function reset(){over=false;sel=null;mode='book';W=null;banner=null;hist=[];cur=startId();render();}
+function reset(){over=false;sel=null;mode='book';W=null;S=null;banner=null;hist=[];cur=startId();render();}
 
+// === persistence: the game survives the phone closing the app ===
+function saveGame(){
+  if(!side)return;
+  try{localStorage.setItem(SAVE_KEY,JSON.stringify({side,mode,cur,W,S,hist}));}catch(e){}
+}
+function restoreGame(){
+  let g;
+  try{g=JSON.parse(localStorage.getItem(SAVE_KEY));}catch(e){return false;}
+  if(!g||!DATA.trees[g.side])return false;
+  const t=DATA.trees[g.side];
+  const okW=w=>w&&typeof w.bd==='string'&&w.bd.length===64&&/^[wb]$/.test(w.turn);
+  const okStep=h=>h&&(h.mode==='book'?!!t[h.cur]:(h.mode==='wander'&&okW(h.W)));
+  const okNow=g.mode==='book'?!!t[g.cur]
+    :g.mode==='wander'?okW(g.W)
+    :g.mode==='setup'&&okW(g.S)&&g.S.prev&&okStep(g.S.prev);
+  if(!okNow||!Array.isArray(g.hist)||!g.hist.every(okStep))return false;
+  side=g.side;tree=t;mode=g.mode;cur=g.cur;W=g.W;S=g.S;hist=g.hist;
+  over=false;sel=null;banner=null;
+  $('#pick').style.display='none';
+  render();
+  return true;
+}
+
+function closePick(){ $('#pick').style.display='none'; }
 document.querySelectorAll('.side').forEach(b=>b.addEventListener('click',()=>{
-  side=b.dataset.side;tree=DATA.trees[side];$('#pick').style.display='none';reset();
+  side=b.dataset.side;tree=DATA.trees[side];closePick();reset();
 }));
-$('#reset').addEventListener('click',()=>{ $('#pick').style.display='flex'; });
+$('#pickcancel').addEventListener('click',closePick);
+$('#reset').addEventListener('click',()=>{ $('#pickcancel').hidden=!side; $('#pick').style.display='flex'; });
 $('#undo').addEventListener('click',undo);
 $('#setup').addEventListener('click',()=>{ if(side)enterSetup(); });
 $('#hunt').addEventListener('click',ev=>{
@@ -652,18 +724,11 @@ $('#mainline').addEventListener('click',ev=>{
   if(mode==='book'){advance(t.dataset.uci);return;}
   if(mode==='wander'){
     const uci=t.dataset.uci;
-    const from=idxOf(uci.slice(0,2)),to=idxOf(uci.slice(2,4));
-    pushHist();banner=null;sel=null;
-    wanderMove(from,to);
-    const back=lookup();
-    if(back){
-      mode='book';cur=back;W=null;
-      banner='<div class="plate back"><h2>Back in the book</h2><p>The position matches a known trap line again. The hunt resumes.</p></div>';
-      render();banner=null;return;
-    }
-    render();
+    sel=null;
+    wanderStep(idxOf(uci.slice(0,2)),idxOf(uci.slice(2,4)));
   }
 });
+restoreGame();
 </script>
 </body>
 </html>
